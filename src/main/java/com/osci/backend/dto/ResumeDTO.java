@@ -18,4 +18,5 @@ public class ResumeDTO {
     private String summary;
     private Integer yearsOfExperience;
     private String skills;
+    private String requestIp;
 }
