@@ -50,24 +50,28 @@ pipeline {
             }
         }
 
-        stage('Deploy to Backend Server') {
-            steps {
-                echo 'Deploying to Backend Server'
-                sshagent(credentials: ['backend-ssh-key']) {
-                    sh """
-                        scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${BACKEND_USER}@${BACKEND_SERVER}:~/app/
+stage('Deploy to Backend Server') {
+    steps {
+        echo 'Deploying to Backend Server'
+        sshagent(credentials: ['backend-ssh-key']) {
+            sh """
+                # 필요한 파일들 복사
+                scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${BACKEND_USER}@${BACKEND_SERVER}:~/app/
+                scp -o StrictHostKeyChecking=no deploy.sh ${BACKEND_USER}@${BACKEND_SERVER}:~/app/
 
-                        ssh -o StrictHostKeyChecking=no ${BACKEND_USER}@${BACKEND_SERVER} '
-                            cd ~/app
-                            export ECR_REGISTRY=${ECR_REGISTRY}
-                            export ECR_REPOSITORY=${ECR_REPOSITORY}
-                            export IMAGE_TAG=${IMAGE_TAG}
-                            ./deploy.sh
-                        '
-                    """
-                }
-            }
+                # deploy.sh 실행
+                ssh -o StrictHostKeyChecking=no ${BACKEND_USER}@${BACKEND_SERVER} '
+                    cd ~/app
+                    chmod +x deploy.sh
+                    export ECR_REGISTRY=${ECR_REGISTRY}
+                    export ECR_REPOSITORY=${ECR_REPOSITORY}
+                    export IMAGE_TAG=${IMAGE_TAG}
+                    ./deploy.sh
+                '
+            """
         }
+    }
+}
 
         stage('Health Check') {
             steps {
