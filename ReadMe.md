@@ -20,7 +20,7 @@
 - 요청자 IP 추적
 - 초기 데이터 자동 로드
 
-## 🛠️ 기술 스택
+## 기술 스택
 
 ### Backend
 - **Language:** Java 17
@@ -45,7 +45,7 @@
 - Spring Boot Actuator
 ```
 
-## 🚀 주요 기능
+## 주요 기능
 
 ### 1. 이력서 관리 API
 - 이력 목록 조회 (GET /api/resumes)
