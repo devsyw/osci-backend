@@ -9,7 +9,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ResumeDTO {
+public class ResumeDTO { //ss
     private Long id;
     private String name;
     private String email;
