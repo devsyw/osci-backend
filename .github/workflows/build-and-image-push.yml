@@ -1,0 +1,89 @@
+name: Build and image Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: resume-backend
+  ECR_REGISTRY: 224600478173.dkr.ecr.ap-northeast-2.amazonaws.com
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        run: |
+          chmod +x ./mvnw
+          ./mvnw clean package -DskipTests
+          echo "Maven build completed"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker image
+        id: build-image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "Image pushed to ECR"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Trigger Jenkins Deployment
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_URL }}
+          JENKINS_USER: ${{ secrets.JENKINS_USER }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          JENKINS_JOB: ${{ secrets.JENKINS_JOB_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Triggering Jenkins deployment"
+          
+          curl -X POST \
+            "${JENKINS_URL}/job/${JENKINS_JOB}/buildWithParameters" \
+            --user "${JENKINS_USER}:${JENKINS_TOKEN}" \
+            --data-urlencode "IMAGE_TAG=${IMAGE_TAG}" \
+            --data-urlencode "GIT_COMMIT=${GITHUB_SHA}" \
+            --data-urlencode "GIT_BRANCH=${GITHUB_REF_NAME}"
+          
+          echo "Jenkins deployment triggered"
+
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **ECR Repository:** $ECR_REGISTRY/$ECR_REPOSITORY" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image successfully pushed to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "Jenkins deployment triggered" >> $GITHUB_STEP_SUMMARY
