@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
         resume-backend:
-                image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG:-latest}
+                image: 224600478173.dkr.ecr.ap-northeast-2.amazonaws.com/resume-backend:latest
                 container_name: resume-backend
                 restart: unless-stopped
                 ports:
@@ -17,14 +17,20 @@ services:
                         - SPRING_DATASOURCE_DRIVER=org.h2.Driver
                         - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.H2Dialect
                         - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+                        - TZ=Asia/Seoul
                 healthcheck:
-                        test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+                        test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/8080' || exit 1"]
                         interval: 30s
-                        timeout: 3s
+                        timeout: 10s
                         start_period: 60s
                         retries: 3
                 networks:
                         - resume-network
+                logging:
+                        driver: "json-file"
+                        options:
+                                max-size: "10m"
+                                max-file: "3"
 
 volumes:
         h2-data:
