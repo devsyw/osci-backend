@@ -1,0 +1,370 @@
+---
+version: 2
+
+# Plan 정의 - 전체 CI/CD 파이프라인
+plan:
+  project-key: DEMO                             # 프로젝트 키 (대문자)
+  key: SPRING                                   # Plan 키
+  name: Spring Boot CI/CD Pipeline              # Plan 표시 이름
+
+# 저장소 연결 설정
+repositories:
+  - my-repo:                                    # 저장소 별칭
+      type: git                                 # Git 타입
+      url: https://github.com/devsyw/osci-backend.git # Git 저장소 URL
+      branch: main                              # 기본 브랜치
+
+# 변수 정의 (전역 변수)
+variables:
+  DOCKER_REGISTRY: "docker.io"                  # Docker 레지스트리 주소
+  APP_NAME: "myapp"                             # 애플리케이션 이름
+  DOCKER_IMAGE: "${DOCKER_REGISTRY}/${APP_NAME}"
+
+# Stage 정의 - 순차적으로 실행되는 단계들
+stages:
+  # Stage 1: 빌드 및 테스트
+  - Build and Test:
+      manual: false                             # 자동 실행 (true면 수동 실행)
+      final: false                              # 최종 Stage 아님
+      jobs:
+        - Build                                 # 실행할 Job 이름
+
+  # Stage 2: Docker 이미지 빌드
+  - Docker Build:
+      manual: false
+      final: false
+      jobs:
+        - Docker Image Build
+
+  # Stage 3: 개발 환경 배포
+  - Deploy to Dev:
+      manual: false                             # 자동 배포
+      final: false
+      jobs:
+        - Deploy Dev
+
+  # Stage 4: 운영 환경 배포
+  - Deploy to Production:
+      manual: true                              # 수동 승인 필요
+      final: true                               # 마지막 Stage
+      jobs:
+        - Deploy Prod
+
+# Job 정의: Build
+Build:
+  key: BUILD
+  tasks:
+    # Task 1: 소스코드 체크아웃
+    - checkout:
+        force-clean-build: true                 # 빌드 전 작업 디렉토리 완전 삭제
+        description: Git에서 소스코드 체크아웃
+
+    # Task 2: Gradle 빌드 실행
+    - script:
+        interpreter: SHELL                      # Bash 쉘 사용
+        scripts:
+          - |-
+            chmod +x ./gradlew
+            ./gradlew clean package -DskipTests
+            ls -la build/libs/
+        description: Gradle 빌드 및 테스트 실행
+
+    # Task 3: 테스트 결과 파싱
+#    - test-parser:
+#        type: junit                             # JUnit 포맷 테스트 결과
+#        test-results: build/test-results/**/*.xml  # 테스트 결과 파일 위치
+#        description: JUnit 테스트 결과 파싱 및 리포팅
+
+    # Task 4: 코드 커버리지 체크 (선택사항)
+#    - script:
+#        interpreter: SHELL
+#        scripts:
+#          - |-
+#            # JaCoCo 커버리지 리포트 생성
+#            ./gradlew jacocoTestReport
+#
+#            # 커버리지 최소 기준 체크 (예: 80%)
+#            ./gradlew jacocoTestCoverageVerification
+#        description: 코드 커버리지 검증
+
+  # Artifact 정의 - 다음 Job/Stage에서 사용할 파일
+  artifacts:
+    - name: application-jar                     # Artifact 이름
+      pattern: build/libs/*.jar                 # 파일 패턴
+      shared: true                              # 다른 Job과 공유
+      required: true                            # 필수 Artifact
+
+  # Job 실행 요구사항
+  requirements:
+    - system.builder.gradle.Gradle              # Gradle 설치 필요
+    - system.jdk.JDK 17                         # JDK 17 필요
+
+# Job 정의: Docker Image Build
+Docker Image Build:
+  key: DOCKER
+  tasks:
+    # Task 1: 작업 디렉토리 초기화
+    - clean
+
+    # Task 2: 이전 Stage의 JAR 파일 다운로드
+    - artifact-download:
+        artifacts:
+          - name: application-jar               # 다운로드할 Artifact
+            destination: build/libs/            # 다운로드 위치
+
+    # Task 3: Dockerfile 생성 (인라인)
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            # Dockerfile 동적 생성
+            cat > Dockerfile << 'EOF'
+            FROM eclipse-temurin:17-jre-alpine
+            
+            # 작업 디렉토리 설정
+            WORKDIR /app
+            
+            # JAR 파일 복사
+            COPY build/libs/*.jar app.jar
+            
+            # 애플리케이션 포트 노출
+            EXPOSE 8080
+            
+            # 컨테이너 시작 명령
+            ENTRYPOINT ["java", "-jar", "app.jar"]
+            EOF
+        description: Dockerfile 생성
+
+    # Task 4: Docker 이미지 빌드
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            # 빌드 번호를 태그로 사용
+            IMAGE_TAG="${bamboo.buildNumber}"
+            
+            # Docker 이미지 빌드
+            docker build \
+              -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+              -t ${DOCKER_IMAGE}:latest \
+              .
+            
+            # 빌드된 이미지 확인
+            docker images | grep ${APP_NAME}
+            
+            # (선택) 이미지 크기 확인
+            echo "이미지 크기: $(docker images ${DOCKER_IMAGE}:${IMAGE_TAG} --format '{{.Size}}')"
+        description: Docker 이미지 빌드 및 태깅
+
+    # Task 5: Docker 이미지 푸시 (선택사항)
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            # Docker Hub 로그인 (환경변수 사용)
+            echo ${bamboo.DOCKER_PASSWORD} | docker login -u ${bamboo.DOCKER_USERNAME} --password-stdin
+            
+            # 이미지 푸시
+            docker push ${DOCKER_IMAGE}:${bamboo.buildNumber}
+            docker push ${DOCKER_IMAGE}:latest
+            
+            # 로그아웃
+            docker logout
+        description: Docker 이미지 레지스트리 푸시
+
+  requirements:
+    - system.docker.executable                  # Docker 명령어 사용 가능해야 함
+
+# Job 정의: Deploy Dev
+Deploy Dev:
+  key: DEPLOY_DEV
+  tasks:
+    - clean
+
+    # Docker Compose를 이용한 배포
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            # docker-compose.dev.yml 생성
+            cat > docker-compose.dev.yml << 'EOF'
+            version: '3.8'
+            services:
+              app:
+                image: ${DOCKER_IMAGE}:${bamboo.buildNumber}
+                container_name: myapp-dev
+                ports:
+                  - "8080:8080"
+                environment:
+                  - SPRING_PROFILES_ACTIVE=dev
+                  - DATABASE_URL=jdbc:postgresql://dev-db:5432/myapp
+                restart: always
+            EOF
+            
+            # 기존 컨테이너 중지 및 제거
+            docker-compose -f docker-compose.dev.yml down || true
+            
+            # 새 컨테이너 시작
+            docker-compose -f docker-compose.dev.yml up -d
+            
+            # 헬스체크 대기 (최대 60초)
+            echo "애플리케이션 시작 대기 중..."
+            for i in {1..12}; do
+              if curl -f http://localhost:8080/actuator/health > /dev/null 2>&1; then
+                echo "✅ 애플리케이션이 정상적으로 시작되었습니다."
+                exit 0
+              fi
+              echo "재시도 $i/12..."
+              sleep 5
+            done
+            
+            echo "❌ 애플리케이션 시작 실패"
+            docker-compose -f docker-compose.dev.yml logs
+            exit 1
+        description: 개발 환경 배포 및 헬스체크
+
+  requirements:
+    - system.docker.executable
+
+# Job 정의: Deploy Prod
+Deploy Prod:
+  key: DEPLOY_PROD
+  tasks:
+    - clean
+
+    # Blue-Green 배포 전략
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            #!/bin/bash
+            set -e  # 에러 발생시 스크립트 중단
+            
+            # 현재 실행 중인 컨테이너 색상 확인
+            CURRENT_COLOR=$(docker ps --filter "name=myapp-prod" --format "{{.Names}}" | grep -o 'blue\|green' | head -1)
+            
+            # 새로 배포할 색상 결정
+            if [ "$CURRENT_COLOR" = "blue" ]; then
+              NEW_COLOR="green"
+              OLD_COLOR="blue"
+              NEW_PORT="8081"
+            else
+              NEW_COLOR="blue"
+              OLD_COLOR="green"
+              NEW_PORT="8080"
+            fi
+            
+            echo "🚀 Blue-Green 배포 시작"
+            echo "현재 컬러: $OLD_COLOR → 새 컬러: $NEW_COLOR"
+            
+            # 1. 새 컨테이너 시작
+            echo "1️⃣ 새 컨테이너 시작 중..."
+            docker run -d \
+              --name myapp-prod-${NEW_COLOR} \
+              -p ${NEW_PORT}:8080 \
+              -e SPRING_PROFILES_ACTIVE=prod \
+              -e DATABASE_URL=jdbc:postgresql://prod-db:5432/myapp \
+              --restart always \
+              ${DOCKER_IMAGE}:${bamboo.buildNumber}
+            
+            # 2. 헬스체크
+            echo "2️⃣ 헬스체크 실행 중..."
+            sleep 15  # 초기 시작 대기
+            
+            for i in {1..10}; do
+              if curl -f http://localhost:${NEW_PORT}/actuator/health > /dev/null 2>&1; then
+                echo "✅ 헬스체크 성공"
+                break
+              fi
+              if [ $i -eq 10 ]; then
+                echo "❌ 헬스체크 실패 - 롤백 실행"
+                docker stop myapp-prod-${NEW_COLOR}
+                docker rm myapp-prod-${NEW_COLOR}
+                exit 1
+              fi
+              echo "재시도 $i/10..."
+              sleep 3
+            done
+            
+            # 3. 스모크 테스트
+            echo "3️⃣ 스모크 테스트 실행 중..."
+            RESPONSE=$(curl -s http://localhost:${NEW_PORT}/api/health)
+            if [[ $RESPONSE != *"UP"* ]]; then
+              echo "❌ 스모크 테스트 실패"
+              docker stop myapp-prod-${NEW_COLOR}
+              docker rm myapp-prod-${NEW_COLOR}
+              exit 1
+            fi
+            
+            # 4. 트래픽 전환 (Nginx 설정 변경 - 실제 환경에 맞게 수정)
+            echo "4️⃣ 트래픽 전환 중..."
+            # 여기서 로드밸런서 설정 변경
+            # 예: Nginx upstream 변경, AWS ALB 타겟 그룹 변경 등
+            
+            # 5. 이전 컨테이너 제거
+            echo "5️⃣ 이전 컨테이너 제거 중..."
+            sleep 30  # 연결 완전히 종료될 때까지 대기
+            docker stop myapp-prod-${OLD_COLOR} || true
+            docker rm myapp-prod-${OLD_COLOR} || true
+            
+            echo "✅ Blue-Green 배포 완료!"
+            echo "새 버전: ${bamboo.buildNumber} (${NEW_COLOR})"
+        description: Blue-Green 배포 전략으로 운영 배포
+
+    # 배포 완료 알림
+    - script:
+        interpreter: SHELL
+        scripts:
+          - |-
+            # Slack 알림 (선택사항)
+            curl -X POST ${bamboo.SLACK_WEBHOOK_URL} \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"text\": \"✅ 운영 배포 완료\",
+                \"attachments\": [{
+                  \"color\": \"good\",
+                  \"fields\": [
+                    {\"title\": \"빌드\", \"value\": \"#${bamboo.buildNumber}\", \"short\": true},
+                    {\"title\": \"브랜치\", \"value\": \"${bamboo.planRepository.branch}\", \"short\": true}
+                  ]
+                }]
+              }"
+        description: 배포 완료 알림
+
+  requirements:
+    - system.docker.executable
+
+# 브랜치 자동 생성 설정
+branches:
+  create: for-pull-request                     # PR 생성시 브랜치 Plan 자동 생성
+  delete:
+    after-deleted-days: 7                       # 브랜치 삭제 7일 후 Plan 삭제
+    after-inactive-days: 30                     # 30일 비활성시 Plan 삭제
+  integration:
+    push-on-success: false                      # 빌드 성공시 integration 브랜치로 자동 머지 안함
+    merge-from: main                            # main 브랜치에서 머지
+
+# 알림 설정
+notifications:
+  - events:
+      - plan-completed                          # 빌드 완료시
+      - plan-failed                             # 빌드 실패시
+    recipients:
+      - committers                              # 커밋한 사람에게 알림
+      - watchers                                # Plan을 watch하는 사람에게 알림
+
+# Plan 권한 설정
+plan-permissions:
+  - users:
+      - admin                                   # 관리자
+    permissions:
+      - view                                    # 조회 권한
+      - edit                                    # 수정 권한
+      - build                                   # 빌드 실행 권한
+      - clone                                   # 복제 권한
+      - admin                                   # 관리자 권한
+  - groups:
+      - developers                              # 개발자 그룹
+    permissions:
+      - view
+      - build
